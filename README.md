@@ -1,8 +1,11 @@
 # Pilot Protocol — Python SDK
 
+[![ci](https://github.com/pilot-protocol/sdk-python/actions/workflows/ci.yml/badge.svg)](https://github.com/pilot-protocol/sdk-python/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/pilot-protocol/sdk-python/branch/main/graph/badge.svg)](https://codecov.io/gh/pilot-protocol/sdk-python)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 [![PyPI version](https://img.shields.io/pypi/v/pilotprotocol)](https://pypi.org/project/pilotprotocol/)
 [![Python versions](https://img.shields.io/pypi/pyversions/pilotprotocol)](https://pypi.org/project/pilotprotocol/)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 Python client for the [Pilot Protocol](https://pilotprotocol.network) overlay network. Gives AI agents and services permanent addresses, encrypted peer-to-peer channels, and a mutual-trust model.
 
