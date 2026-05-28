@@ -406,15 +406,18 @@ class TestSubscribeEvent:
         assert events == []
         assert conn.closed is True
 
-    def test_eof_error_breaks_cleanly(self, monkeypatch):
+    def test_eof_error_propagates(self, monkeypatch):
+        # RuntimeError containing "EOF" is NOT a clean disconnect —
+        # only PilotError("connection closed") should be silenced.
         class EofConn(FakeConn):
             def read(self, size: int = 4096) -> bytes:
                 raise RuntimeError("unexpected EOF on stream")
 
         conn = EofConn()
         d = _make_driver_with_dial(monkeypatch, conn)
-        events = list(d.subscribe_event("0:0001.0000.0002", "t", timeout=2))
-        assert events == []
+        with pytest.raises(RuntimeError, match="unexpected EOF on stream"):
+            list(d.subscribe_event("0:0001.0000.0002", "t", timeout=2))
+        assert conn.closed is True
 
     def test_other_exception_propagates(self, monkeypatch):
         # Error string contains neither "connection closed" nor "EOF" —
