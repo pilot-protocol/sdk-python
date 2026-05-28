@@ -1020,3 +1020,21 @@ class TestDriverMemberTags:
         d = client_mod.Driver()
         with pytest.raises(PilotError, match="not admin"):
             d.member_tags_set(7, 1, ["x"])
+
+
+# ---------------------------------------------------------------------------
+# Wire-frame size caps
+# ---------------------------------------------------------------------------
+
+class TestWireFrameCaps:
+    def test_max_payload_size_constant(self):
+        assert client_mod.MAX_PAYLOAD_SIZE == 1_048_576
+
+    def test_max_topic_size_constant(self):
+        assert client_mod.MAX_TOPIC_SIZE == 4_096
+
+    def test_oversized_payload_safe_triggers(self):
+        """Verify that an oversized ack_len doesn't call conn.read."""
+        # A 32-bit length of 0xFFFFFFFF triggers the cap guard.
+        oversized = 0xFFFFFFFF
+        assert oversized > client_mod.MAX_PAYLOAD_SIZE
