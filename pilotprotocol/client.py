@@ -519,6 +519,11 @@ class Listener:
 
 DEFAULT_SOCKET_PATH = "/tmp/pilot.sock"
 
+# Wire-frame safety caps: reject frames whose declared length exceeds
+# these limits BEFORE allocating memory.
+MAX_PAYLOAD_SIZE = 1_048_576   # 1 MiB — matches Pilot wire protocol max message
+MAX_TOPIC_SIZE  = 4_096        # 4 KiB — event-stream topic strings are short
+
 
 class Driver:
     """Pythonic wrapper around the Go driver via libpilot.
@@ -872,6 +877,8 @@ class Driver:
                 ack_header = conn.read(8)
                 if ack_header and len(ack_header) == 8:
                     ack_type, ack_len = struct.unpack('>II', ack_header)
+                    if ack_len > MAX_PAYLOAD_SIZE:
+                        return {"sent": len(data), "type": msg_type, "target": addr}
                     ack_payload = conn.read(ack_len)
                     if ack_payload:
                         ack_msg = ack_payload.decode('utf-8', errors='replace')
@@ -929,6 +936,8 @@ class Driver:
                 ack_header = conn.read(8)
                 if ack_header and len(ack_header) == 8:
                     ack_type, ack_len = struct.unpack('>II', ack_header)
+                    if ack_len > MAX_PAYLOAD_SIZE:
+                        return {"sent": len(file_data), "filename": filename, "target": addr}
                     ack_payload = conn.read(ack_len)
                     if ack_payload:
                         ack_msg = ack_payload.decode('utf-8', errors='replace')
@@ -1019,6 +1028,8 @@ class Driver:
             if not topic_len_bytes or len(topic_len_bytes) < 2:
                 return None
             topic_len = struct.unpack('>H', topic_len_bytes)[0]
+            if topic_len > MAX_TOPIC_SIZE:
+                return None
             
             # Read topic
             topic_bytes = conn.read(topic_len)
@@ -1031,6 +1042,8 @@ class Driver:
             if not payload_len_bytes or len(payload_len_bytes) < 4:
                 return None
             payload_len = struct.unpack('>I', payload_len_bytes)[0]
+            if payload_len > MAX_PAYLOAD_SIZE:
+                return None
             
             # Read payload
             payload = conn.read(payload_len)
