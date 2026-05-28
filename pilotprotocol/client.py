@@ -1058,7 +1058,7 @@ class Driver:
                     else:
                         yield (event_topic, event_data)
                 except Exception as e:
-                    if "connection closed" in str(e).lower() or "EOF" in str(e):
+                    if isinstance(e, PilotError) and "connection closed" in str(e).lower():
                         break
                     raise
         finally:
