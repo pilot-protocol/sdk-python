@@ -18,7 +18,7 @@ name = "pilotprotocol"
 version = "1.9.1"  # Auto-updated by CI workflow
 description = "Python SDK for Pilot Protocol - the network stack for AI agents"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = {text = "AGPL-3.0-or-later"}
 authors = [
     {name = "Alexandru Godoroja", email = "alex@pilotprotocol.network"}
