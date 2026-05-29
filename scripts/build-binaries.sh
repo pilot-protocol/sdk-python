@@ -36,25 +36,25 @@ mkdir -p "$OUTPUT_DIR"
 
 # 1. Build daemon
 echo "1. Building pilot-daemon..."
-CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -ldflags="-s -w" -o "$OUTPUT_DIR/pilot-daemon" ./cmd/daemon
+CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -ldflags="-s -w -X main.Version=$SDK_VERSION" -o "$OUTPUT_DIR/pilot-daemon" ./cmd/daemon
 echo "   ✓ Built: $OUTPUT_DIR/pilot-daemon"
 echo ""
 
 # 2. Build pilotctl
 echo "2. Building pilotctl..."
-CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -ldflags="-s -w" -o "$OUTPUT_DIR/pilotctl" ./cmd/pilotctl
+CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -ldflags="-s -w -X main.Version=$SDK_VERSION" -o "$OUTPUT_DIR/pilotctl" ./cmd/pilotctl
 echo "   ✓ Built: $OUTPUT_DIR/pilotctl"
 echo ""
 
 # 3. Build gateway
 echo "3. Building pilot-gateway..."
-CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -ldflags="-s -w" -o "$OUTPUT_DIR/pilot-gateway" ./cmd/gateway
+CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -ldflags="-s -w -X main.Version=$SDK_VERSION" -o "$OUTPUT_DIR/pilot-gateway" ./cmd/gateway
 echo "   ✓ Built: $OUTPUT_DIR/pilot-gateway"
 echo ""
 
 # 4. Build updater
 echo "4. Building pilot-updater..."
-CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -ldflags="-s -w" -o "$OUTPUT_DIR/pilot-updater" ./cmd/updater
+CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -ldflags="-s -w -X main.Version=$SDK_VERSION" -o "$OUTPUT_DIR/pilot-updater" ./cmd/updater
 echo "   ✓ Built: $OUTPUT_DIR/pilot-updater"
 echo ""
 

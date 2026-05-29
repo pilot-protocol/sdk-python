@@ -70,6 +70,58 @@ def _platform_lib_name() -> str:
     return name
 
 
+# Magic bytes per binary format. We sniff the first 4 bytes of one
+# bundled binary and compare to the host platform, so a mistakenly
+# packaged macOS binary on a Linux wheel (or vice versa) fails loudly
+# at seed-time instead of producing "Exec format error" downstream
+# with no actionable diagnostic.
+_FORMAT_MAGICS = {
+    "ELF":   b"\x7fELF",                                # Linux
+    "MACHO": (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+              b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe"),  # Mach-O / fat
+    "PE":    b"MZ",                                       # Windows
+}
+_EXPECTED_FORMAT = {"Linux": "ELF", "Darwin": "MACHO", "Windows": "PE"}
+
+
+def _validate_binary_platform(binary_path: Path) -> None:
+    """Sniff binary magic bytes; raise OSError if format != host platform."""
+    host_system = platform.system()
+    expected = _EXPECTED_FORMAT.get(host_system)
+    if expected is None:
+        # Unsupported host — _platform_lib_name will raise the proper error
+        return
+    try:
+        with binary_path.open("rb") as f:
+            head = f.read(4)
+    except OSError:
+        return  # Caller will hit the missing-file case naturally
+    if not head:
+        return
+    expected_magics = _FORMAT_MAGICS[expected]
+    if isinstance(expected_magics, bytes):
+        expected_magics = (expected_magics,)
+    if not any(head.startswith(m) for m in expected_magics):
+        # Identify what we DID find. Only raise if we detect a KNOWN
+        # binary format that's the WRONG one (e.g. Mach-O on Linux).
+        # If the file is a text stub / empty / unrecognized header, the
+        # existing seeder pipeline (atomic_install + exec) will surface
+        # the failure naturally — don't pre-empt it.
+        detected = None
+        for fmt, magics in _FORMAT_MAGICS.items():
+            magics = magics if isinstance(magics, tuple) else (magics,)
+            if any(head.startswith(m) for m in magics):
+                detected = fmt
+                break
+        if detected is not None and detected != expected:
+            raise OSError(
+                f"pilotprotocol wheel binary at {binary_path} has format {detected!r} "
+                f"but host {host_system} expects {expected!r}. The wheel was likely "
+                f"built for a different platform; reinstall the platform-specific "
+                f"wheel (pip install --force-reinstall pilotprotocol)."
+            )
+
+
 # ---------------------------------------------------------------------------
 # Version helpers
 # ---------------------------------------------------------------------------
@@ -245,6 +297,13 @@ def ensure_runtime_seeded(force: bool = False) -> Path:
 
     Set ``force=True`` to re-run even if this process has already seeded.
     """
+    # PILOT-208: validate the wheel's bundled binaries match the host
+    # platform before doing any I/O. Catches wrong-platform wheels at
+    # seed-time with a clear error, instead of silent "Exec format error"
+    # later when something tries to exec a Mach-O binary on Linux.
+    _src_bin = _pkg_bin_dir() / "pilotctl"
+    if _src_bin.exists():
+        _validate_binary_platform(_src_bin)
     global _SEEDED_ONCE
     if _SEEDED_ONCE and not force:
         return _runtime_bin()
