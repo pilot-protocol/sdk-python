@@ -37,8 +37,8 @@ _LIB_NAMES = {
     "Windows": "libpilot.dll",
 }
 
-DEFAULT_REGISTRY = "34.71.57.205:9000"
-DEFAULT_BEACON = "34.71.57.205:9001"
+DEFAULT_REGISTRY = "registry.pilotprotocol.network:9000"
+DEFAULT_BEACON = "registry.pilotprotocol.network:9001"
 DEFAULT_SOCKET = "/tmp/pilot.sock"
 
 
