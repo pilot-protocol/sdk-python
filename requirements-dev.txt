@@ -1,0 +1,12 @@
+# Pinned dev tools for reproducible builds.
+# PILOT-289 — replace ">=" requirements with "==" so each contributor /
+# CI run resolves to identical versions. Bump these intentionally as
+# part of dev-tool maintenance, not via constraint drift.
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+mypy==1.13.0
+ruff==0.8.4
+black==24.10.0
+build==1.2.2.post1
+twine==6.0.1
