@@ -1,0 +1,37 @@
+name: SDK examples smoke test
+
+# PILOT-195: keeps the README quickstart honest. If the example breaks,
+# CI fails immediately rather than at the next user's cold-install.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: README quickstart smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e .
+
+      - name: Run quickstart from README
+        run: |
+          # PILOT-197: extract the first ```python fenced block from
+          # README.md and run it; this is the same block users copy-paste.
+          awk '/^```python$/{flag=1;next}/^```$/{flag=0}flag' README.md > /tmp/quickstart.py
+          if [ ! -s /tmp/quickstart.py ]; then
+            echo "::error::no quickstart code block found in README.md"
+            exit 1
+          fi
+          python /tmp/quickstart.py
