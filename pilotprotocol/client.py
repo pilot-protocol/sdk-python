@@ -27,6 +27,7 @@ import json
 import os
 import platform
 import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -607,6 +608,31 @@ class Driver:
     def revoke_trust(self, node_id: int) -> dict[str, Any]:
         """Remove a peer from the trusted set."""
         return self._call_json("PilotRevokeTrust", ctypes.c_uint32(node_id))
+
+    def wait_for_trust(self, node_id: int, timeout_ms: int) -> bool:
+        """Block until ``node_id`` appears in trusted_peers, or until timeout.
+
+        Parity with sdk-swift's ``Pilot.waitForTrust(peerID:timeoutMs:)``.
+        Returns ``True`` when the peer is trusted; ``False`` on timeout.
+        Does not raise on timeout — only re-raises unexpected daemon errors
+        from the underlying ``trusted_peers()`` call.
+
+        PILOT-202: lets Python callers replace the boilerplate poll loop
+        that Swift callers don't have to write.
+        """
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+        # Poll cadence: tight enough to feel snappy, loose enough not to
+        # hammer the IPC. Mirrors sdk-swift's 50ms cadence.
+        interval = 0.05
+        while True:
+            peers = self.trusted_peers()
+            for p in peers.get("peers", []) or []:
+                if int(p.get("node_id", 0)) == int(node_id):
+                    return True
+            now = time.monotonic()
+            if now >= deadline:
+                return False
+            time.sleep(min(interval, deadline - now))
 
     # -- Hostname --
 
