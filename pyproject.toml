@@ -66,9 +66,9 @@ pilot-updater = "pilotprotocol.cli:run_updater"
 [project.urls]
 Homepage = "https://pilotprotocol.network"
 Documentation = "https://pilotprotocol.network/docs/"
-Repository = "https://github.com/TeoSlayer/pilotprotocol"
-"Bug Tracker" = "https://github.com/TeoSlayer/pilotprotocol/issues"
-Changelog = "https://github.com/TeoSlayer/pilotprotocol/blob/main/sdk/python/CHANGELOG.md"
+Repository = "https://github.com/pilot-protocol/pilotprotocol"
+"Bug Tracker" = "https://github.com/pilot-protocol/pilotprotocol/issues"
+Changelog = "https://github.com/pilot-protocol/pilotprotocol/blob/main/sdk/python/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
