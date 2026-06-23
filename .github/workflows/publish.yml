@@ -1,56 +1,293 @@
 name: publish
 
-# PILOT-203: PyPI publish workflow.
+# PILOT-203 / release fan-out: PyPI publish workflow.
 #
 # Triggers on:
-#   - Release published (the normal path: tag a release on GitHub → publish)
-#   - workflow_dispatch (manual fallback when a release was created but
-#     publish missed it, or when republishing on a fresh PYPI_API_TOKEN)
+#   - workflow_dispatch with a `version` input — the canonical path. web4's
+#     release pipeline dispatches this at the daemon tag (e.g. 1.12.3) so the
+#     SDK publishes version-locked to the daemon, NOT to whatever stale
+#     version sits in pyproject.toml.
+#   - release published (legacy path, kept for manual GitHub releases in this
+#     repo). Uses the release tag as the version.
+#
+# The published wheel BUNDLES the native runtime (pilot-daemon, pilotctl,
+# pilot-gateway, pilot-updater, libpilot.{so,dylib}) under pilotprotocol/bin/.
+# Those binaries are built from source here because the standalone SDK repo
+# carries no Go code: libpilot (the CGO shared lib) lives in
+# pilot-protocol/libpilot and builds against a set of sibling Go modules
+# (the same checkout set libpilot CI uses). Building from source keeps the
+# wheel version-locked and reproducible.
 #
 # Required secret:
 #   PYPI_API_TOKEN — pypi.org token scoped to the pilotprotocol project.
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (with or without leading v, e.g. 1.12.3)'
+        required: true
+        type: string
   release:
     types: [published]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  # Single source of truth for the version across all jobs. Leading v is
+  # stripped later in the normalize step.
+  PILOT_VERSION: ${{ inputs.version || github.event.release.tag_name }}
+
 jobs:
-  build:
-    name: Build wheel + sdist
-    runs-on: ubuntu-latest
+  build-wheels:
+    name: Build wheel (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout sdk-python
+        uses: actions/checkout@v4
+        with:
+          path: sdk-python
+
+      # libpilot + its sibling Go modules. go.mod in libpilot uses local
+      # `replace` directives pointing at ../<repo>, so every replaced module
+      # must be checked out as a sibling directory at the workspace root.
+      - name: Checkout libpilot
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/libpilot, path: libpilot }
+      - name: Checkout web4
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/pilotprotocol, path: web4, ref: "${{ env.PILOT_VERSION }}" }
+      - name: Checkout common
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/common, path: common }
+      - name: Checkout trustedagents
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/trustedagents, path: trustedagents }
+      - name: Checkout handshake
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/handshake, path: handshake }
+      - name: Checkout policy
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/policy, path: policy }
+      - name: Checkout runtime
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/runtime, path: runtime }
+      - name: Checkout skillinject
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/skillinject, path: skillinject }
+      - name: Checkout webhook
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/webhook, path: webhook }
+      - name: Checkout eventstream
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/eventstream, path: eventstream }
+      - name: Checkout dataexchange
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/dataexchange, path: dataexchange }
+      - name: Checkout updater
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/updater, path: updater }
+      - name: Checkout gateway
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/gateway, path: gateway }
+      - name: Checkout nameserver
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/nameserver, path: nameserver }
+      - name: Checkout rendezvous
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/rendezvous, path: rendezvous }
+      - name: Checkout beacon
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/beacon, path: beacon }
+      - name: Checkout app-store
+        uses: actions/checkout@v4
+        with: { repository: pilot-protocol/app-store, path: app-store }
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: web4/go.mod
+
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - run: python -m pip install --upgrade build twine
-      - run: python -m build
-      - run: python -m twine check dist/*
-      - uses: actions/upload-artifact@v4
+          python-version: '3.11'
+
+      - name: Normalize version
+        id: ver
+        shell: bash
+        run: |
+          VERSION="${PILOT_VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            echo "::error::no version supplied (inputs.version / release tag both empty)"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building pilotprotocol $VERSION"
+
+      - name: Pin version in pyproject.toml
+        shell: bash
+        working-directory: sdk-python
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          python - "$V" <<'PY'
+          import re, sys, pathlib
+          v = sys.argv[1]
+          p = pathlib.Path("pyproject.toml")
+          s = p.read_text()
+          s = re.sub(r'(?m)^version\s*=\s*".*?".*$', f'version = "{v}"', s, count=1)
+          p.write_text(s)
+          print("pyproject version ->", v)
+          PY
+          grep -m1 '^version' pyproject.toml
+
+      - name: Build native binaries (daemon, pilotctl, gateway, updater, libpilot)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ( cd libpilot && go mod tidy )
+
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          case "$(uname -m)" in
+            x86_64) ARCH=amd64 ;;
+            arm64|aarch64) ARCH=arm64 ;;
+            *) echo "::error::unsupported arch $(uname -m)"; exit 1 ;;
+          esac
+          case "$OS" in
+            linux) EXT=so ;;
+            darwin) EXT=dylib ;;
+            *) echo "::error::unsupported os $OS"; exit 1 ;;
+          esac
+
+          OUT="$GITHUB_WORKSPACE/sdk-python/pilotprotocol/bin"
+          mkdir -p "$OUT"
+          LDFLAGS="-s -w -X main.version=${{ steps.ver.outputs.version }}"
+
+          echo "Building daemon/pilotctl/updater from web4..."
+          ( cd web4 && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-daemon"  ./cmd/daemon )
+          ( cd web4 && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilotctl"       ./cmd/pilotctl )
+          ( cd web4 && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-updater"  ./cmd/updater )
+
+          echo "Building gateway..."
+          ( cd gateway && go mod tidy && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-gateway" ./cmd/gateway ) \
+            || ( cd gateway && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-gateway" . )
+
+          echo "Building libpilot CGO shared library..."
+          ( cd libpilot && CGO_ENABLED=1 go build -buildmode=c-shared -ldflags "-s -w" -o "$OUT/libpilot.$EXT" . )
+
+          echo "${{ steps.ver.outputs.version }}" > "$OUT/.pilot-version"
+
+          if [ "$OS" = "darwin" ]; then
+            for b in "$OUT/pilot-daemon" "$OUT/pilotctl" "$OUT/pilot-gateway" "$OUT/pilot-updater" "$OUT/libpilot.$EXT"; do
+              codesign --force --deep --sign - "$b" || true
+              xattr -cr "$b" || true
+            done
+          fi
+
+          echo "Bundled binaries:"
+          ls -lh "$OUT"
+
+      - name: Build wheel + sdist
+        shell: bash
+        working-directory: sdk-python
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip build twine
+          cat > setup.py <<'EOF'
+          from setuptools import setup
+          from setuptools.dist import Distribution
+          class BinaryDistribution(Distribution):
+              def has_ext_modules(self):
+                  return True
+          setup(distclass=BinaryDistribution)
+          EOF
+          python -m build --wheel
+          python -m build --sdist
+          rm -f setup.py
+
+      - name: Repair to manylinux (Linux)
+        if: matrix.platform == 'linux'
+        shell: bash
+        working-directory: sdk-python
+        run: |
+          pip install auditwheel patchelf
+          for plat in manylinux_2_35_x86_64 manylinux_2_31_x86_64 manylinux_2_28_x86_64; do
+            if auditwheel repair dist/*-linux_x86_64.whl --plat "$plat" -w dist/ 2>/dev/null; then
+              echo "repaired to $plat"; break
+            fi
+          done
+          rm -f dist/*-linux_x86_64.whl || true
+
+      - name: Verify
+        shell: bash
+        working-directory: sdk-python
+        run: python -m twine check dist/*
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/
+          name: dist-${{ matrix.platform }}
+          path: sdk-python/dist/*.whl
+          retention-days: 7
+
+      - name: Upload sdist (Linux only)
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-sdist
+          path: sdk-python/dist/*.tar.gz
           retention-days: 7
 
   publish:
     name: Publish to PyPI
-    needs: build
+    needs: build-wheels
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # OIDC for trusted publisher (preferred). Falls back to API token
-      # when configured below.
-      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: dist
-          path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          verbose: true
+          path: dist-artifacts
+
+      - name: Collect dist
+        run: |
+          mkdir -p dist
+          find dist-artifacts -name '*.whl' -exec cp {} dist/ \;
+          find dist-artifacts -name '*.tar.gz' -exec cp {} dist/ \;
+          ls -lh dist/
+
+      - name: Resolve version + skip-if-exists
+        id: check
+        run: |
+          WHEEL=$(ls dist/*.whl | head -1)
+          VERSION=$(echo "$WHEEL" | sed -n 's/.*pilotprotocol-\([0-9][^-]*\)-.*/\1/p')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if curl -fsS "https://pypi.org/pypi/pilotprotocol/$VERSION/json" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::pilotprotocol $VERSION already on PyPI — skipping upload"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to PyPI
+        if: steps.check.outputs.exists == 'false'
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          pip install --upgrade twine
+          python -m twine upload --non-interactive dist/*
+
+      - name: Summary
+        run: |
+          {
+            echo "## Python SDK"
+            echo "- Version: \`${{ steps.check.outputs.version }}\`"
+            echo "- Already present: \`${{ steps.check.outputs.exists }}\`"
+            echo "- Install: \`pip install pilotprotocol\`"
+          } >> "$GITHUB_STEP_SUMMARY"
