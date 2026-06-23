@@ -35,12 +35,32 @@ permissions:
   contents: read
 
 env:
-  # Single source of truth for the version across all jobs. Leading v is
-  # stripped later in the normalize step.
-  PILOT_VERSION: ${{ inputs.version || github.event.release.tag_name }}
+  PILOT_VERSION_RAW: ${{ inputs.version || github.event.release.tag_name }}
 
 jobs:
+  # Normalize the version once. `version` is bare (X.Y.Z) for package
+  # metadata; `ref` is the web4 git tag (always vX.Y.Z) for source checkout.
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      ref: ${{ steps.v.outputs.ref }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          RAW="${PILOT_VERSION_RAW}"
+          if [ -z "$RAW" ]; then
+            echo "::error::no version supplied (inputs.version / release tag both empty)"
+            exit 1
+          fi
+          BARE="${RAW#v}"
+          echo "version=$BARE" >> "$GITHUB_OUTPUT"
+          echo "ref=v$BARE"    >> "$GITHUB_OUTPUT"
+          echo "version=$BARE ref=v$BARE"
+
   build-wheels:
+    needs: prep
     name: Build wheel (${{ matrix.platform }})
     strategy:
       fail-fast: false
@@ -65,7 +85,7 @@ jobs:
         with: { repository: pilot-protocol/libpilot, path: libpilot }
       - name: Checkout web4
         uses: actions/checkout@v4
-        with: { repository: pilot-protocol/pilotprotocol, path: web4, ref: "${{ env.PILOT_VERSION }}" }
+        with: { repository: pilot-protocol/pilotprotocol, path: web4, ref: "${{ needs.prep.outputs.ref }}" }
       - name: Checkout common
         uses: actions/checkout@v4
         with: { repository: pilot-protocol/common, path: common }
@@ -120,23 +140,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Normalize version
-        id: ver
-        shell: bash
-        run: |
-          VERSION="${PILOT_VERSION#v}"
-          if [ -z "$VERSION" ]; then
-            echo "::error::no version supplied (inputs.version / release tag both empty)"
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building pilotprotocol $VERSION"
-
       - name: Pin version in pyproject.toml
         shell: bash
         working-directory: sdk-python
         run: |
-          V="${{ steps.ver.outputs.version }}"
+          V="${{ needs.prep.outputs.version }}"
           python - "$V" <<'PY'
           import re, sys, pathlib
           v = sys.argv[1]
@@ -168,7 +176,7 @@ jobs:
 
           OUT="$GITHUB_WORKSPACE/sdk-python/pilotprotocol/bin"
           mkdir -p "$OUT"
-          LDFLAGS="-s -w -X main.version=${{ steps.ver.outputs.version }}"
+          LDFLAGS="-s -w -X main.version=${{ needs.prep.outputs.version }}"
 
           echo "Building daemon/pilotctl/updater from web4..."
           ( cd web4 && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-daemon"  ./cmd/daemon )
@@ -182,7 +190,7 @@ jobs:
           echo "Building libpilot CGO shared library..."
           ( cd libpilot && CGO_ENABLED=1 go build -buildmode=c-shared -ldflags "-s -w" -o "$OUT/libpilot.$EXT" . )
 
-          echo "${{ steps.ver.outputs.version }}" > "$OUT/.pilot-version"
+          echo "${{ needs.prep.outputs.version }}" > "$OUT/.pilot-version"
 
           if [ "$OS" = "darwin" ]; then
             for b in "$OUT/pilot-daemon" "$OUT/pilotctl" "$OUT/pilot-gateway" "$OUT/pilot-updater" "$OUT/libpilot.$EXT"; do
