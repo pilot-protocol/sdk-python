@@ -258,6 +258,10 @@ jobs:
     needs: build-wheels
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - uses: actions/download-artifact@v4
         with:
           path: dist-artifacts
@@ -288,7 +292,9 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          pip install --upgrade twine
+          # twine >= 6.1 understands Metadata-Version 2.4 (License-File),
+          # which modern setuptools emits; older system twine rejects it.
+          python -m pip install --upgrade "twine>=6.1"
           python -m twine upload --non-interactive dist/*
 
       - name: Summary
