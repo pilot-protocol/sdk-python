@@ -50,7 +50,7 @@ pip install build twine
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/TeoSlayer/pilotprotocol.git
+git clone https://github.com/pilot-protocol/pilotprotocol.git
 cd pilotprotocol/sdk/python
 ```
 
