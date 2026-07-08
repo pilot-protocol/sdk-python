@@ -184,8 +184,17 @@ jobs:
           ( cd web4 && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-updater"  ./cmd/updater )
 
           echo "Building gateway..."
-          ( cd gateway && go mod tidy && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-gateway" ./cmd/gateway ) \
-            || ( cd gateway && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-gateway" . )
+          # The gateway repo is currently a library (no ./cmd/gateway). The old
+          # fallback `go build .` compiled that library into a Go object archive
+          # and shipped it as "pilot-gateway" — a non-executable file (the v1.12.4
+          # wheels contain it). Skip cleanly instead; the console script then
+          # fails with a clear missing-binary error, and the build resumes
+          # automatically if the repo grows a cmd/gateway again.
+          if [ -d gateway/cmd/gateway ]; then
+            ( cd gateway && go mod tidy && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$OUT/pilot-gateway" ./cmd/gateway )
+          else
+            echo "gateway repo has no cmd/gateway — skipping pilot-gateway binary"
+          fi
 
           echo "Building libpilot CGO shared library..."
           ( cd libpilot && CGO_ENABLED=1 go build -buildmode=c-shared -ldflags "-s -w" -o "$OUT/libpilot.$EXT" . )
