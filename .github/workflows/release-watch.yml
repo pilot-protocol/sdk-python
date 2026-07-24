@@ -1,0 +1,110 @@
+name: release-watch
+
+# Self-polling release watcher for the PyPI SDK.
+#
+# Polls the PUBLIC latest release of pilot-protocol/pilotprotocol every 30
+# minutes (and on manual dispatch). If the upstream daemon version is newer
+# than what is currently published on PyPI, it triggers THIS repo's existing
+# publish.yml at that version via a same-repo workflow_dispatch.
+#
+# Token: NONE new.
+#   - Reading the upstream release is public (no auth).
+#   - Reading the published PyPI version is public (pypi.org JSON, no auth).
+#   - Dispatching publish.yml is same-repo, so the built-in GITHUB_TOKEN is
+#     sufficient (same-repo workflow_dispatch is allowed for GITHUB_TOKEN).
+#   - publish.yml itself still uses the existing PYPI_API_TOKEN secret to
+#     publish, and is idempotent (skip-if-exists), so a redundant trigger is
+#     harmless.
+#
+# This replaces the web4 -> sdk-python cross-repo dispatch that needed a PAT
+# (RELEASE_DISPATCH_TOKEN). Poll lag is ~30 min; workflow_dispatch is the
+# instant manual path.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write   # required to dispatch publish.yml in this same repo
+
+concurrency:
+  group: release-watch
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: pilot-protocol/pilotprotocol
+  PACKAGE: pilotprotocol
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve latest upstream version
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=$(gh release view --repo "$UPSTREAM_REPO" --json tagName --jq '.tagName')
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "::error::could not resolve latest release tag for $UPSTREAM_REPO"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest: ${TAG#v}"
+
+      - name: Resolve published PyPI version
+        id: published
+        run: |
+          set -euo pipefail
+          PUB=$(curl -fsS "https://pypi.org/pypi/${PACKAGE}/json" | jq -r '.info.version' 2>/dev/null || echo "")
+          [ "$PUB" = "null" ] && PUB=""
+          echo "version=$PUB" >> "$GITHUB_OUTPUT"
+          echo "Published on PyPI: ${PUB:-<none>}"
+
+      - name: Decide whether to publish
+        id: decide
+        run: |
+          set -euo pipefail
+          LATEST="${{ steps.latest.outputs.version }}"
+          PUB="${{ steps.published.outputs.version }}"
+          if [ "$LATEST" = "$PUB" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "PyPI already at $LATEST — nothing to do."
+            exit 0
+          fi
+          # Publish whenever the versions differ and upstream is the higher
+          # one. `sort -V` puts the larger version last.
+          HIGHEST=$(printf '%s\n%s\n' "$LATEST" "$PUB" | sort -V | tail -1)
+          if [ "$HIGHEST" = "$LATEST" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream $LATEST > PyPI ${PUB:-<none>} — will dispatch publish."
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "PyPI $PUB is ahead of upstream $LATEST — nothing to do."
+          fi
+
+      - name: Dispatch publish.yml
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run publish.yml \
+            --ref "${{ github.ref_name }}" \
+            -f version="${{ steps.latest.outputs.version }}"
+          echo "Dispatched publish.yml @ ${{ steps.latest.outputs.version }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "## PyPI release watch"
+            echo "- Upstream latest: \`${{ steps.latest.outputs.version }}\`"
+            echo "- Published on PyPI: \`${{ steps.published.outputs.version }}\`"
+            echo "- Dispatched publish: \`${{ steps.decide.outputs.publish }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

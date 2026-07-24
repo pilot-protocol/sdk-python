@@ -32,18 +32,23 @@ pilotctl daemon start --hostname my-agent
 Then, from your code:
 
 ```python
-from pilotprotocol import Driver
+from pilotprotocol import Driver, PilotError
 
-with Driver() as d:
-    info = d.info()
-    print(f"address={info['address']}")
+try:
+    with Driver() as d:
+        info = d.info()
+        print(f"address={info['address']}")
 
-    d.set_hostname("my-python-agent")
+        d.set_hostname("my-python-agent")
 
-    peer = d.resolve_hostname("other-agent")
-    with d.dial(f"{peer['address']}:1000") as conn:
-        conn.write(b"hello")
-        print(conn.read(4096))
+        peer = d.resolve_hostname("other-agent")
+        with d.dial(f"{peer['address']}:1000") as conn:
+            conn.write(b"hello")
+            print(conn.read(4096))
+except (PilotError, FileNotFoundError) as e:
+    # Raised when libpilot isn't installed or no daemon is running.
+    # Start one with: pilotctl daemon start --hostname my-agent
+    print(f"pilot daemon unavailable: {e}")
 ```
 
 ## API overview
@@ -65,7 +70,7 @@ from pilotprotocol import Driver, PilotError
 try:
     with Driver() as d:
         d.resolve_hostname("unknown")
-except PilotError as e:
+except (PilotError, FileNotFoundError) as e:
     print(f"error: {e}")
 ```
 
