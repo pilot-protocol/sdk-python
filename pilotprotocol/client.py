@@ -286,20 +286,13 @@ def _setup_signatures(lib: ctypes.CDLL) -> None:  # pragma: no cover
 
     # Managed (handle, uint16) -> *char
     for name in (
-        "PilotManagedStatus", "PilotManagedRankings",
+        "PilotManagedStatus",
         "PilotManagedForceCycle", "PilotManagedReconcile",
         "PilotPolicyGet",
     ):
         fn = getattr(lib, name)
         fn.argtypes = [ctypes.c_uint64, ctypes.c_uint16]
         fn.restype = ctypes.c_void_p
-
-    # PilotManagedScore: (handle, uint16 net, uint32 node, int32 delta, *char topic)
-    lib.PilotManagedScore.argtypes = [
-        ctypes.c_uint64, ctypes.c_uint16, ctypes.c_uint32,
-        ctypes.c_int32, ctypes.c_char_p,
-    ]
-    lib.PilotManagedScore.restype = ctypes.c_void_p
 
     # PilotPolicySet: (handle, uint16, *char json)
     lib.PilotPolicySet.argtypes = [ctypes.c_uint64, ctypes.c_uint16, ctypes.c_char_p]
@@ -404,6 +397,26 @@ class Conn:
         data = ctypes.string_at(res.data, res.n)
         lib.FreeString(res.data)
         return data
+
+    def read_full(self, size: int) -> bytes:
+        """Read exactly *size* bytes.
+
+        A single ``read()`` returns whatever the transport had available, which
+        may be fewer bytes than requested. Framed protocols need the whole
+        field, so loop until *size* bytes are collected. Returns fewer bytes
+        only when the peer stops sending (short read == end of stream).
+        """
+        if size <= 0:
+            return b""
+        chunks: list[bytes] = []
+        remaining = size
+        while remaining > 0:
+            chunk = self.read(remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
     def write(self, data: bytes) -> int:
         """Write bytes to the connection. Returns bytes written."""
@@ -782,29 +795,9 @@ class Driver:
 
     # -- Managed networks --
 
-    def managed_score(
-        self,
-        network_id: int,
-        node_id: int,
-        delta: int,
-        topic: str = "",
-    ) -> dict[str, Any]:
-        """Adjust a peer's score in a managed network."""
-        return self._call_json(
-            "PilotManagedScore",
-            ctypes.c_uint16(network_id),
-            ctypes.c_uint32(node_id),
-            ctypes.c_int32(delta),
-            topic.encode(),
-        )
-
     def managed_status(self, network_id: int) -> dict[str, Any]:
         """Return the status of a managed network engine."""
         return self._call_json("PilotManagedStatus", ctypes.c_uint16(network_id))
-
-    def managed_rankings(self, network_id: int) -> dict[str, Any]:
-        """Return ranked peers in a managed network."""
-        return self._call_json("PilotManagedRankings", ctypes.c_uint16(network_id))
 
     def managed_force_cycle(self, network_id: int) -> dict[str, Any]:
         """Force a prune/fill cycle in a managed network."""
@@ -900,12 +893,12 @@ class Driver:
             
             # Read ACK response frame
             try:
-                ack_header = conn.read(8)
+                ack_header = conn.read_full(8)
                 if ack_header and len(ack_header) == 8:
                     ack_type, ack_len = struct.unpack('>II', ack_header)
                     if ack_len > MAX_PAYLOAD_SIZE:
                         return {"sent": len(data), "type": msg_type, "target": addr}
-                    ack_payload = conn.read(ack_len)
+                    ack_payload = conn.read_full(ack_len)
                     if ack_payload:
                         ack_msg = ack_payload.decode('utf-8', errors='replace')
                         return {"sent": len(data), "type": msg_type, "target": addr, "ack": ack_msg}
@@ -959,12 +952,12 @@ class Driver:
             
             # Read ACK response frame
             try:
-                ack_header = conn.read(8)
+                ack_header = conn.read_full(8)
                 if ack_header and len(ack_header) == 8:
                     ack_type, ack_len = struct.unpack('>II', ack_header)
                     if ack_len > MAX_PAYLOAD_SIZE:
                         return {"sent": len(file_data), "filename": filename, "target": addr}
-                    ack_payload = conn.read(ack_len)
+                    ack_payload = conn.read_full(ack_len)
                     if ack_payload:
                         ack_msg = ack_payload.decode('utf-8', errors='replace')
                         return {"sent": len(file_data), "filename": filename, "target": addr, "ack": ack_msg}
@@ -1050,7 +1043,7 @@ class Driver:
         # Helper to read event frame
         def read_event(conn):
             # Read 2-byte topic length
-            topic_len_bytes = conn.read(2)
+            topic_len_bytes = conn.read_full(2)
             if not topic_len_bytes or len(topic_len_bytes) < 2:
                 return None
             topic_len = struct.unpack('>H', topic_len_bytes)[0]
@@ -1058,13 +1051,13 @@ class Driver:
                 return None
             
             # Read topic
-            topic_bytes = conn.read(topic_len)
+            topic_bytes = conn.read_full(topic_len)
             if not topic_bytes or len(topic_bytes) < topic_len:
                 return None
             topic_str = topic_bytes.decode('utf-8')
             
             # Read 4-byte payload length
-            payload_len_bytes = conn.read(4)
+            payload_len_bytes = conn.read_full(4)
             if not payload_len_bytes or len(payload_len_bytes) < 4:
                 return None
             payload_len = struct.unpack('>I', payload_len_bytes)[0]
@@ -1072,7 +1065,7 @@ class Driver:
                 return None
             
             # Read payload
-            payload = conn.read(payload_len)
+            payload = conn.read_full(payload_len)
             if not payload or len(payload) < payload_len:
                 return None
                 

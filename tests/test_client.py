@@ -222,19 +222,10 @@ class FakeLib:
             "PilotNetworkRespondInvite", _json_ok({"status": "responded"})
         )
 
-    def PilotManagedScore(self, h, network_id, node_id, delta, topic):
-        self._last_managed_score = (
-            _unwrap(network_id), _unwrap(node_id), _unwrap(delta), topic,
-        )
-        return self._json_returns.get("PilotManagedScore", _json_ok({"status": "ok"}))
-
     def PilotManagedStatus(self, h, network_id):
         return self._json_returns.get(
             "PilotManagedStatus", _json_ok({"network_id": _unwrap(network_id)})
         )
-
-    def PilotManagedRankings(self, h, network_id):
-        return self._json_returns.get("PilotManagedRankings", _json_ok({"rankings": []}))
 
     def PilotManagedForceCycle(self, h, network_id):
         return self._json_returns.get("PilotManagedForceCycle", _json_ok({"status": "cycled"}))
@@ -468,6 +459,42 @@ class TestConn:
         conn.close()
         with pytest.raises(PilotError, match="closed"):
             conn.read()
+
+    def test_read_full_reassembles_short_reads(self, fake_lib):
+        """read_full keeps reading until the requested byte count is met."""
+        chunks = [b"ab", b"cd", b"ef"]
+        calls: list[int] = []
+
+        def fake_read(h, size):
+            calls.append(size)
+            if not chunks:
+                return _mock_read_result(n=0, data=None, err=None)
+            c = chunks.pop(0)
+            return _mock_read_result(n=len(c), data=c, err=None)
+
+        fake_lib.PilotConnRead = fake_read
+        conn = client_mod.Conn(10)
+        assert conn.read_full(6) == b"abcdef"
+        # Each call asks only for the bytes still outstanding.
+        assert calls == [6, 4, 2]
+
+    def test_read_full_returns_short_on_end_of_stream(self, fake_lib):
+        chunks = [b"ab"]
+
+        def fake_read(h, size):
+            if not chunks:
+                return _mock_read_result(n=0, data=None, err=None)
+            c = chunks.pop(0)
+            return _mock_read_result(n=len(c), data=c, err=None)
+
+        fake_lib.PilotConnRead = fake_read
+        conn = client_mod.Conn(10)
+        assert conn.read_full(6) == b"ab"
+
+    def test_read_full_non_positive(self, fake_lib):
+        conn = client_mod.Conn(10)
+        assert conn.read_full(0) == b""
+        assert conn.read_full(-1) == b""
 
     def test_write(self, fake_lib):
         conn = client_mod.Conn(10)
@@ -915,32 +942,10 @@ class TestDriverNetworks:
 # ---------------------------------------------------------------------------
 
 class TestDriverManaged:
-    def test_managed_score_passes_args(self, fake_lib):
-        d = client_mod.Driver()
-        r = d.managed_score(7, 4242, -3, "spam")
-        assert r["status"] == "ok"
-        assert fake_lib._last_managed_score == (7, 4242, -3, b"spam")
-
-    def test_managed_score_default_topic(self, fake_lib):
-        d = client_mod.Driver()
-        d.managed_score(0, 1, 5)
-        assert fake_lib._last_managed_score == (0, 1, 5, b"")
-
-    def test_managed_score_negative_delta_preserved(self, fake_lib):
-        # int32 delta — make sure negative numbers survive
-        d = client_mod.Driver()
-        d.managed_score(0, 1, -100000, "x")
-        assert fake_lib._last_managed_score[2] == -100000
-
     def test_managed_status(self, fake_lib):
         d = client_mod.Driver()
         r = d.managed_status(42)
         assert r["network_id"] == 42
-
-    def test_managed_rankings(self, fake_lib):
-        d = client_mod.Driver()
-        r = d.managed_rankings(42)
-        assert "rankings" in r
 
     def test_managed_force_cycle(self, fake_lib):
         d = client_mod.Driver()
