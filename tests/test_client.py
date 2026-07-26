@@ -460,6 +460,24 @@ class TestConn:
         with pytest.raises(PilotError, match="closed"):
             conn.read()
 
+    def test_read_frees_zero_length_buffer(self, fake_lib):
+        """A zero-length read still hands back an owned buffer."""
+        ptr = b"\x01"  # stand-in for a non-null pointer
+        fake_lib.PilotConnRead = lambda h, size: _mock_read_result(
+            n=0, data=ptr, err=None
+        )
+        conn = client_mod.Conn(10)
+        assert conn.read(4096) == b""
+        assert ptr in fake_lib._freed
+
+    def test_read_frees_nothing_on_null_buffer(self, fake_lib):
+        fake_lib.PilotConnRead = lambda h, size: _mock_read_result(
+            n=0, data=None, err=None
+        )
+        conn = client_mod.Conn(10)
+        assert conn.read(4096) == b""
+        assert fake_lib._freed == []
+
     def test_read_full_reassembles_short_reads(self, fake_lib):
         """read_full keeps reading until the requested byte count is met."""
         chunks = [b"ab", b"cd", b"ef"]

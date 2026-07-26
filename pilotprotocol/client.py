@@ -392,9 +392,11 @@ class Conn:
             raw = ctypes.string_at(res.err)
             lib.FreeString(res.err)
             raise PilotError(json.loads(raw)["error"])
-        if res.n == 0:
+        if not res.data:
             return b""
-        data = ctypes.string_at(res.data, res.n)
+        data = ctypes.string_at(res.data, res.n) if res.n > 0 else b""
+        # The library allocates its return buffer unconditionally, so the
+        # pointer is ours to release whenever it is non-null.
         lib.FreeString(res.data)
         return data
 
