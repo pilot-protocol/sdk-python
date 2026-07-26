@@ -54,6 +54,10 @@ class FakeConn:
             return chunk[:size]
         return chunk
 
+    # Bind the production reassembly loop so the fakes drive real code; it
+    # only depends on read().
+    read_full = client_mod.Conn.read_full
+
     def close(self) -> None:
         self.closed = True
 
@@ -106,6 +110,14 @@ class TestSendMessage:
         # Frame on the wire: [type=1][length=5]hello
         assert conn.writes[0] == struct.pack(">II", 1, 5) + b"hello"
         assert conn.closed is True
+
+    def test_ack_split_across_reads(self, monkeypatch):
+        """The 8-byte ack header and its body may arrive in pieces."""
+        frame = b"".join(_ack_frame("ACK TEXT 5 bytes"))
+        conn = FakeConn(reads=[frame[i : i + 3] for i in range(0, len(frame), 3)])
+        d = _make_driver_with_dial(monkeypatch, conn)
+        result = d.send_message("0:0001.0000.0002", b"hello")
+        assert result["ack"] == "ACK TEXT 5 bytes"
 
     def test_hostname_path_calls_resolve(self, monkeypatch):
         conn = FakeConn(reads=_ack_frame())
@@ -344,6 +356,19 @@ class TestSubscribeEvent:
         # First write is the subscription frame with empty payload
         topic_len = struct.unpack(">H", conn.writes[0][:2])[0]
         assert conn.writes[0][2 : 2 + topic_len] == b"foo"
+
+    def test_yields_events_when_frame_arrives_in_small_chunks(self, monkeypatch):
+        """A frame split across transport reads is still decoded whole.
+
+        The transport hands back whatever arrived, so every field of the
+        frame — length prefixes included — can land in pieces.
+        """
+        frame = b"".join(_event_bytes("foo", b"hello world"))
+        chunks = [frame[i : i + 1] for i in range(len(frame))]
+        conn = FakeConn(reads=chunks)
+        d = _make_driver_with_dial(monkeypatch, conn)
+        events = list(d.subscribe_event("0:0001.0000.0002", "foo", timeout=5))
+        assert events == [("foo", b"hello world")]
 
     def test_callback_invoked_instead_of_yield(self, monkeypatch):
         conn = FakeConn(reads=_event_bytes("t", b"p"))

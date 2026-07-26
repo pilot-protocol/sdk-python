@@ -47,3 +47,43 @@ jobs:
             htmlcov/
           retention-days: 30
           if-no-files-found: ignore
+
+  # Builds libpilot from source and resolves every FFI symbol the SDK names
+  # against it. The rest of the suite substitutes a fake library object, so
+  # this is the only job that notices when the two repos drift apart.
+  ffi-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sdk-python
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pilot-protocol/libpilot
+          path: libpilot
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build libpilot
+        working-directory: libpilot
+        run: CGO_ENABLED=1 go build -buildmode=c-shared -o libpilot.so .
+
+      - name: Install SDK
+        working-directory: sdk-python
+        run: |
+          pip install --upgrade pip
+          pip install -e . pytest
+
+      - name: Resolve FFI symbols against the freshly built library
+        working-directory: sdk-python
+        env:
+          PILOT_LIB_PATH: ${{ github.workspace }}/libpilot/libpilot.so
+          PILOT_REQUIRE_LIB: '1'
+        run: pytest tests/test_ffi_smoke.py -v -p no:cacheprovider --no-cov
