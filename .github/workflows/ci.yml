@@ -79,7 +79,13 @@ jobs:
         working-directory: sdk-python
         run: |
           pip install --upgrade pip
-          pip install -e . pytest
+          # pytest-cov is required even though this job measures no coverage:
+          # pyproject's [tool.pytest.ini_options] addopts always passes --cov,
+          # and the run below passes --no-cov to switch it off. Without the
+          # plugin installed, pytest rejects both as unrecognized arguments and
+          # exits 4 before collecting a single test — which is why ffi-smoke
+          # has failed on every run since it was introduced.
+          pip install -e . pytest pytest-cov
 
       - name: Resolve FFI symbols against the freshly built library
         working-directory: sdk-python
