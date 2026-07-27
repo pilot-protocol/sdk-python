@@ -3,11 +3,22 @@ include README.md
 include LICENSE
 include CHANGELOG.md
 
-# Include all binaries in bin/ directory (the seed cache).
-# Dotfiles like .pilot-version need an explicit pattern because some
-# setuptools versions skip them under recursive-include.
-recursive-include pilotprotocol/bin *
-include pilotprotocol/bin/.pilot-version
+# The native runtime (pilot-daemon, pilotctl, pilot-updater, libpilot.*) is
+# deliberately NOT shipped in the sdist.
+#
+# Those binaries are platform-specific and are staged into pilotprotocol/bin/
+# by the publish workflow just before the wheel is built, so whatever host
+# builds the sdist would otherwise bake ITS OWN os/arch binaries into a
+# platform-neutral artifact. That is exactly what shipped in <=1.13.6: the
+# sdist was cut on the Linux runner, so every platform without a matching
+# wheel (macOS on any Python != 3.11, and all arm64 Linux) silently installed
+# Linux x86-64 ELF binaries and then failed at run time with a confusing
+# "cannot open shared object file" / missing-libpilot.dylib error.
+#
+# The wheel still carries them via [tool.setuptools.package-data]; only the
+# sdist is pruned. Installing from sdist now yields a clearly-diagnosable
+# "libpilot not found" instead of a wrong-architecture payload.
+prune pilotprotocol/bin
 
 # Include type stubs if any
 recursive-include pilotprotocol *.pyi

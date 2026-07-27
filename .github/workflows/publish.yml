@@ -61,15 +61,23 @@ jobs:
 
   build-wheels:
     needs: prep
-    name: Build wheel (${{ matrix.platform }})
+    name: Build wheel (${{ matrix.platform }}/${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             platform: linux
-          - os: macos-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+          - os: macos-14          # Apple Silicon
             platform: macos
+            arch: arm64
+          - os: macos-13          # Intel
+            platform: macos
+            arch: x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout sdk-python
@@ -235,27 +243,75 @@ jobs:
         working-directory: sdk-python
         run: |
           pip install auditwheel patchelf
-          for plat in manylinux_2_35_x86_64 manylinux_2_31_x86_64 manylinux_2_28_x86_64; do
-            if auditwheel repair dist/*-linux_x86_64.whl --plat "$plat" -w dist/ 2>/dev/null; then
+          A="${{ matrix.arch }}"
+          for plat in "manylinux_2_35_$A" "manylinux_2_31_$A" "manylinux_2_28_$A"; do
+            if auditwheel repair dist/*-linux_$A.whl --plat "$plat" -w dist/ 2>/dev/null; then
               echo "repaired to $plat"; break
             fi
           done
-          rm -f dist/*-linux_x86_64.whl || true
+          rm -f dist/*-linux_$A.whl || true
+
+      # The wheel payload is pure data — prebuilt Go binaries and a CGO shared
+      # library loaded via ctypes. Nothing links against libpython and there is
+      # no C extension, so the interpreter tag setuptools infers from the build
+      # host (cp311, because this workflow builds on Python 3.11) is wrong and
+      # needlessly narrow: it made the wheel invisible to every Python except
+      # 3.11, sending 3.12/3.13/3.14 users to the sdist instead.
+      #
+      # Retag to py3-none so any CPython 3.x resolves it. The platform tag is
+      # also forced on macOS: setuptools labels the wheel "universal2" because
+      # the runner's Python is universal2, but the Go toolchain produced a
+      # single-arch libpilot, so the universal2 claim was a lie that broke
+      # Intel Macs. Pin the real arch and a 11.0 floor instead of the runner's
+      # macOS 26, which excluded everyone not yet on Tahoe.
+      - name: Normalize wheel tags
+        shell: bash
+        working-directory: sdk-python
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade wheel
+          if [ "${{ matrix.platform }}" = "macos" ]; then
+            python -m wheel tags --python-tag py3 --abi-tag none \
+              --platform-tag "macosx_11_0_${{ matrix.arch }}" --remove dist/*.whl
+          else
+            python -m wheel tags --python-tag py3 --abi-tag none --remove dist/*.whl
+          fi
+          echo "Final wheel(s):"; ls -1 dist/*.whl
 
       - name: Verify
         shell: bash
         working-directory: sdk-python
         run: python -m twine check dist/*
 
+      # Guard against shipping an empty wheel: the native runtime is the whole
+      # point of this package, and MANIFEST.in now prunes it from the sdist.
+      - name: Assert wheel carries the native runtime
+        shell: bash
+        working-directory: sdk-python
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          w = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(w).namelist()
+          need = ["pilotprotocol/bin/pilot-daemon", "pilotctl"]
+          have = [n for n in names if "/bin/" in n]
+          print(w, "->", have)
+          if not any("libpilot" in n for n in have) or not any("pilotctl" in n for n in have):
+              sys.exit("::error::wheel is missing the native runtime")
+          PY
+
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.platform }}
+          name: dist-${{ matrix.platform }}-${{ matrix.arch }}
           path: sdk-python/dist/*.whl
           retention-days: 7
 
-      - name: Upload sdist (Linux only)
-        if: matrix.platform == 'linux'
+      # Exactly one job may publish the sdist, otherwise the artifact name
+      # collides. It is platform-neutral now (MANIFEST.in prunes bin/), so any
+      # single job will do.
+      - name: Upload sdist (Linux x86_64 only)
+        if: matrix.platform == 'linux' && matrix.arch == 'x86_64'
         uses: actions/upload-artifact@v4
         with:
           name: dist-sdist
