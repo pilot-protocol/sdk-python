@@ -44,6 +44,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Keep the schedule enabled
+        # GitHub disables a public repository's scheduled workflows after
+        # 60 days without activity. This one was, on 2026-09-25, and the
+        # package fell four daemon releases behind before anyone noticed.
+        # Enabling the workflow through the API resets that timer, so each
+        # run keeps the next ones coming. Never blocks the watch itself.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/release-watch.yml/enable" \
+            || echo "::warning::could not re-enable release-watch; GitHub may disable its schedule after 60 days without activity"
+
       - name: Resolve latest upstream version
         id: latest
         env:
