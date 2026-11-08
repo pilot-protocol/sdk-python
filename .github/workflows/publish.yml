@@ -142,7 +142,11 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: web4/go.mod
+          # The shipped pilot-daemon, pilotctl, pilot-updater and libpilot are
+          # built with Go 1.27.3, as pilotprotocol's release.yml builds the
+          # release tarballs. web4's go.mod go line (1.25.13) is left alone;
+          # Go 1.25 is end of life.
+          go-version: "1.27.3"
 
       - uses: actions/setup-python@v5
         with:
