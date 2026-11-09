@@ -65,7 +65,8 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          # The toolchain publish.yml builds the shipped libpilot with.
+          go-version: '1.27.3'
 
       - uses: actions/setup-python@v5
         with:
